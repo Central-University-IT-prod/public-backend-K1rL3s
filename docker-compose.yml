@@ -1,0 +1,93 @@
+version: "3.9"
+
+services:
+
+  database:
+    image: postgres:16.2-alpine3.19
+    container_name: prod-bot-database
+    restart: unless-stopped
+    volumes:
+      - "/var/prod/k1rles-bot/db:/var/lib/postgresql/data"
+    ports:
+      - "5678:5432"
+    environment:
+      POSTGRES_DB: prodbot_db
+      POSTGRES_USER: prodbot
+      POSTGRES_PASSWORD: prodbot
+      PGDATA: "/var/lib/postgresql/data/pgdata"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U prodbot -d prodbot_db" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  redis:
+    image: redis:7.2.4-alpine3.19
+    container_name: prod-bot-redis
+    restart: unless-stopped
+    volumes:
+      - "/var/prod/k1rles-bot/redis:/data"
+    ports:
+      - "8765:6379"
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    command: "redis-server --save 60 1 --loglevel warning --requirepass prodbot"
+
+  migrations:
+    build:
+      context: .
+      dockerfile: ./src/migrations/Dockerfile
+    environment:
+      POSTGRES_HOST: database
+      POSTGRES_HOST_PORT: 5432
+      POSTGRES_DB: prodbot_db
+      POSTGRES_USER: prodbot
+      POSTGRES_PASSWORD: prodbot
+    depends_on:
+      database:
+        condition: service_healthy
+
+  route:
+    container_name: prod-bot-route
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./src/route/Dockerfile
+    environment:
+      ROUTE_PORT: 5123
+      GRAPHHOPPER_KEY: secret
+    ports:
+      - "5123:5123"
+
+  bot:
+    container_name: prod-bot
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: ./src/bot/Dockerfile
+    environment:
+      PYTHONUNBUFFERED: 1
+      PYTHONDONTWRITEBYTECODE: 1
+      BOT_TOKEN: secret
+      POSTGRES_HOST: database
+      POSTGRES_HOST_PORT: 5432
+      POSTGRES_DB: prodbot_db
+      POSTGRES_USER: prodbot
+      POSTGRES_PASSWORD: prodbot
+      REDIS_HOST: redis
+      REDIS_HOST_PORT: 6379
+      REDIS_PASSWORD: prodbot
+      OPEN_WEATHER_KEY: secret
+      GRAPHHOPPER_KEY: secret
+      ROUTE_HOST: route
+      ROUTE_PORT: 5123
+    links:
+      - database
+      - migrations
+      - redis
+      - route
